@@ -1,3 +1,17 @@
+// ProfileScreen.tsx
+// -----------------------------------------------------------------------------
+// Tela de perfil do usuário autenticado.
+// Responsabilidades:
+// 1) Exibir dados básicos do usuário (nome, e-mail, papel/role e avatar).
+// 2) Exibir especialidade quando o usuário é médico.
+// 3) Oferecer ações: editar perfil, voltar e sair (logout).
+//
+// Observações de fluxo:
+// - Os dados vêm do AuthContext (`useAuth()`).
+// - A navegação usa o stack tipado (`RootStackParamList`).
+// - O <Header /> exibe saudação e sino de notificações (retorna null se `user` não existir).
+// -----------------------------------------------------------------------------
+
 import React from 'react';
 import styled from 'styled-components/native';
 import { Button, ListItem } from 'react-native-elements';
@@ -9,14 +23,22 @@ import theme from '../styles/theme';
 import Header from '../components/Header';
 import { ViewStyle } from 'react-native';
 
+// Tipagem da prop de navegação para esta tela (rota 'Profile')
 type ProfileScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Profile'>;
 };
 
 const ProfileScreen: React.FC = () => {
+  // Estado global: usuário autenticado e ação para sair
   const { user, signOut } = useAuth();
+
+  // Navegação tipada para ir/voltar entre telas
   const navigation = useNavigation<ProfileScreenProps['navigation']>();
 
+  // ---------------------------------------------------------------------------
+  // Helper para traduzir o `role` técnico em um rótulo amigável.
+  // Mantém a conversão em um único lugar para consistência.
+  // ---------------------------------------------------------------------------
   const getRoleText = (role: string) => {
     switch (role) {
       case 'admin':
@@ -26,29 +48,40 @@ const ProfileScreen: React.FC = () => {
       case 'patient':
         return 'Paciente';
       default:
-        return role;
+        return role; // fallback genérico, caso venha um papel desconhecido
     }
   };
 
   return (
     <Container>
+      {/* Header com saudação/usuário e sino (não mostra nada se user for null) */}
       <Header />
+
+      {/* Conteúdo rolável (facilita em telas menores e com teclado aberto) */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Title>Meu Perfil</Title>
 
+        {/* Card de perfil: avatar + dados principais + badge de role */}
         <ProfileCard>
+          {/* Avatar com fallback para placeholder simples */}
           <Avatar source={{ uri: user?.image || 'https://via.placeholder.com/150' }} />
+
+          {/* Nome/E-mail (sem edição aqui; o botão abaixo leva para EditProfile) */}
           <Name>{user?.name}</Name>
           <Email>{user?.email}</Email>
+
+          {/* Badge que indica o papel do usuário (admin/médico/paciente) */}
           <RoleBadge role={user?.role || ''}>
             <RoleText>{getRoleText(user?.role || '')}</RoleText>
           </RoleBadge>
           
+          {/* Campo extra exibido apenas para médicos */}
           {user?.role === 'doctor' && (
             <SpecialtyText>Especialidade: {user?.specialty}</SpecialtyText>
           )}
         </ProfileCard>
 
+        {/* Ação: ir para edição de perfil */}
         <Button
           title="Editar Perfil"
           onPress={() => navigation.navigate('EditProfile' as any)}
@@ -56,6 +89,7 @@ const ProfileScreen: React.FC = () => {
           buttonStyle={styles.editButton}
         />
 
+        {/* Ação: voltar para a tela anterior */}
         <Button
           title="Voltar"
           onPress={() => navigation.goBack()}
@@ -63,6 +97,7 @@ const ProfileScreen: React.FC = () => {
           buttonStyle={styles.buttonStyle}
         />
 
+        {/* Ação: encerrar sessão (logout) */}
         <Button
           title="Sair"
           onPress={signOut}
@@ -74,6 +109,9 @@ const ProfileScreen: React.FC = () => {
   );
 };
 
+// -----------------------------------------------------------------------------
+// Estilos em objeto JS (para componentes de terceiros) + styled-components
+// -----------------------------------------------------------------------------
 const styles = {
   scrollContent: {
     padding: 20,
@@ -96,15 +134,18 @@ const styles = {
   },
 };
 
+// Layout base da tela
 const Container = styled.View`
   flex: 1;
   background-color: ${theme.colors.background};
 `;
 
+// Wrapper do conteúdo rolável
 const ScrollView = styled.ScrollView`
   flex: 1;
 `;
 
+// Título da tela
 const Title = styled.Text`
   font-size: 24px;
   font-weight: bold;
@@ -113,6 +154,7 @@ const Title = styled.Text`
   text-align: center;
 `;
 
+// Card de informações do usuário
 const ProfileCard = styled.View`
   background-color: ${theme.colors.background};
   border-radius: 8px;
@@ -123,6 +165,7 @@ const ProfileCard = styled.View`
   border-color: ${theme.colors.border};
 `;
 
+// Imagem do avatar
 const Avatar = styled.Image`
   width: 120px;
   height: 120px;
@@ -130,6 +173,7 @@ const Avatar = styled.Image`
   margin-bottom: 16px;
 `;
 
+// Nome e e-mail
 const Name = styled.Text`
   font-size: 20px;
   font-weight: bold;
@@ -143,6 +187,7 @@ const Email = styled.Text`
   margin-bottom: 8px;
 `;
 
+// Badge de papel com cor semântica por role
 const RoleBadge = styled.View<{ role: string }>`
   background-color: ${(props: { role: string }) => {
     switch (props.role) {
@@ -165,6 +210,7 @@ const RoleText = styled.Text`
   font-weight: 500;
 `;
 
+// Especialidade (só para médicos)
 const SpecialtyText = styled.Text`
   font-size: 16px;
   color: ${theme.colors.text};

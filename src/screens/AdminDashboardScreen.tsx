@@ -1,3 +1,19 @@
+// AdminDashboardScreen.tsx
+// -----------------------------------------------------------------------------
+// Tela de Painel Administrativo.
+// Responsabilidades:
+// 1) Carregar e exibir dados consolidados: consultas, usuários e estatísticas gerais.
+// 2) Exibir cartões de métricas (StatisticsCard) e “top especialidades”.
+// 3) Listar últimas consultas com status e ações rápidas (confirmar/cancelar).
+// 4) Navegar para telas auxiliares (Gerenciar Usuários, Perfil) e permitir logout.
+//
+// Observações de fluxo:
+// - Dados de consultas/usuários vêm do AsyncStorage (mock de persistência local).
+// - Estatísticas vêm do statisticsService (agregações simuladas).
+// - useFocusEffect: recarrega dados sempre que a tela volta a ficar em foco.
+// - Ações de status atualizam o AsyncStorage e recarregam a lista.
+// -----------------------------------------------------------------------------
+
 import React, { useState } from 'react';
 import styled from 'styled-components/native';
 import { ScrollView, ViewStyle, TextStyle } from 'react-native';
@@ -13,10 +29,12 @@ import StatisticsCard from '../components/StatisticsCard';
 import { statisticsService, Statistics } from '../services/statistics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Tipagem de prop de navegação específica desta tela (dashboard admin).
 type AdminDashboardScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'AdminDashboard'>;
 };
 
+// Modelos locais (poderiam ser importados se existirem tipos globais no projeto)
 interface Appointment {
   id: string;
   patientId: string;
@@ -35,10 +53,14 @@ interface User {
   role: 'admin' | 'doctor' | 'patient';
 }
 
+// Props de estilo para badges de status
 interface StyledProps {
-  status: string;
+  status: string; // NOTE: poderia ser 'pending' | 'confirmed' | 'cancelled' para mais segurança de tipo.
 }
 
+// ----------------------------------------------------------------------------
+// Mapeamentos de status -> cor/texto (centralizam semântica visual e strings).
+// ----------------------------------------------------------------------------
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed':
@@ -62,13 +84,24 @@ const getStatusText = (status: string) => {
 };
 
 const AdminDashboardScreen: React.FC = () => {
+  // Auth: permite obter usuário (se necessário) e sair da sessão.
   const { user, signOut } = useAuth();
+
+  // Navegação tipada para chamar rotas do stack.
   const navigation = useNavigation<AdminDashboardScreenProps['navigation']>();
+
+  // Estados locais da tela.
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // --------------------------------------------------------------------------
+  // loadData:
+  // - Lê consultas e usuários do AsyncStorage (se existirem).
+  // - Obtém estatísticas agregadas do statisticsService.
+  // - Garante que `loading` seja desligado no finally, mesmo em caso de erro.
+  // --------------------------------------------------------------------------
   const loadData = async () => {
     try {
       // Carrega consultas
@@ -85,7 +118,7 @@ const AdminDashboardScreen: React.FC = () => {
         setUsers(allUsers);
       }
 
-      // Carrega estatísticas
+      // Carrega estatísticas consolidadas
       const stats = await statisticsService.getGeneralStatistics();
       setStatistics(stats);
     } catch (error) {
@@ -95,13 +128,21 @@ const AdminDashboardScreen: React.FC = () => {
     }
   };
 
-  // Carrega os dados quando a tela estiver em foco
+  // --------------------------------------------------------------------------
+  // Recarrega dados quando a tela volta ao foco (ex.: após navegar para outra).
+  // useFocusEffect com callback sem dependências chama loadData sempre ao focar.
+  // --------------------------------------------------------------------------
   useFocusEffect(
     React.useCallback(() => {
       loadData();
     }, [])
   );
 
+  // --------------------------------------------------------------------------
+  // handleUpdateStatus:
+  // - Atualiza o status de uma consulta específica no AsyncStorage.
+  // - Recarrega a lista (loadData) após persistir a alteração.
+  // --------------------------------------------------------------------------
   const handleUpdateStatus = async (appointmentId: string, newStatus: 'confirmed' | 'cancelled') => {
     try {
       const storedAppointments = await AsyncStorage.getItem('@MedicalApp:appointments');
@@ -114,7 +155,7 @@ const AdminDashboardScreen: React.FC = () => {
           return appointment;
         });
         await AsyncStorage.setItem('@MedicalApp:appointments', JSON.stringify(updatedAppointments));
-        loadData(); // Recarrega os dados
+        loadData(); // Recarrega os dados para refletir mudança
       }
     } catch (error) {
       console.error('Erro ao atualizar status:', error);
@@ -123,10 +164,14 @@ const AdminDashboardScreen: React.FC = () => {
 
   return (
     <Container>
+      {/* Header com saudação/usuário e sino de notificações */}
       <Header />
+
+      {/* Conteúdo scrollável da tela */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Title>Painel Administrativo</Title>
 
+        {/* Ações principais (navegação) */}
         <Button
           title="Gerenciar Usuários"
           onPress={() => navigation.navigate('UserManagement')}
@@ -141,6 +186,7 @@ const AdminDashboardScreen: React.FC = () => {
           buttonStyle={styles.buttonStyle}
         />
 
+        {/* Métricas principais do sistema */}
         <SectionTitle>Estatísticas Gerais</SectionTitle>
         {statistics && (
           <StatisticsGrid>
@@ -171,12 +217,13 @@ const AdminDashboardScreen: React.FC = () => {
           </StatisticsGrid>
         )}
 
+        {/* Top especialidades (ranking simples) */}
         <SectionTitle>Especialidades Mais Procuradas</SectionTitle>
         {statistics && Object.entries(statistics.specialties).length > 0 && (
           <SpecialtyContainer>
             {Object.entries(statistics.specialties)
-              .sort(([,a], [,b]) => b - a)
-              .slice(0, 3)
+              .sort(([, a], [, b]) => b - a) // ordena desc por quantidade
+              .slice(0, 3)                    // top 3
               .map(([specialty, count]) => (
                 <SpecialtyItem key={specialty}>
                   <SpecialtyName>{specialty}</SpecialtyName>
@@ -187,6 +234,7 @@ const AdminDashboardScreen: React.FC = () => {
           </SpecialtyContainer>
         )}
 
+        {/* Lista das últimas consultas com status e ações contextuais */}
         <SectionTitle>Últimas Consultas</SectionTitle>
         {loading ? (
           <LoadingText>Carregando dados...</LoadingText>
@@ -205,11 +253,15 @@ const AdminDashboardScreen: React.FC = () => {
                 <Text style={styles.dateTime as TextStyle}>
                   {appointment.date} às {appointment.time}
                 </Text>
+
+                {/* Badge de status com cor semântica e texto amigável */}
                 <StatusBadge status={appointment.status}>
                   <StatusText status={appointment.status}>
                     {getStatusText(appointment.status)}
                   </StatusText>
                 </StatusBadge>
+
+                {/* Ações rápidas apenas quando a consulta está pendente */}
                 {appointment.status === 'pending' && (
                   <ButtonContainer>
                     <Button
@@ -231,6 +283,7 @@ const AdminDashboardScreen: React.FC = () => {
           ))
         )}
 
+        {/* Encerrar sessão */}
         <Button
           title="Sair"
           onPress={signOut}
@@ -242,6 +295,9 @@ const AdminDashboardScreen: React.FC = () => {
   );
 };
 
+// -----------------------------------------------------------------------------
+// Estilos em objeto JS (para props de componentes de terceiros) e styled-components
+// -----------------------------------------------------------------------------
 const styles = {
   scrollContent: {
     padding: 20,
@@ -308,6 +364,7 @@ const SectionTitle = styled.Text`
   margin-top: 10px;
 `;
 
+// Cartão de cada consulta (usa ListItem para layout consistente)
 const AppointmentCard = styled(ListItem)`
   background-color: ${theme.colors.background};
   border-radius: 8px;
@@ -331,6 +388,7 @@ const EmptyText = styled.Text`
   margin-top: 20px;
 `;
 
+// Badge de status com leve transparência no fundo
 const StatusBadge = styled.View<StyledProps>`
   background-color: ${(props: StyledProps) => getStatusColor(props.status) + '20'};
   padding: 4px 8px;
@@ -339,18 +397,21 @@ const StatusBadge = styled.View<StyledProps>`
   margin-top: 8px;
 `;
 
+// Texto do status com cor semântica correspondente
 const StatusText = styled.Text<StyledProps>`
   color: ${(props: StyledProps) => getStatusColor(props.status)};
   font-size: 12px;
   font-weight: 500;
 `;
 
+// Container para os botões de ação lado a lado
 const ButtonContainer = styled.View`
   flex-direction: row;
   justify-content: space-between;
   margin-top: 8px;
 `;
 
+// Grid de cards de estatísticas (2 colunas confortáveis em telefones com wrap)
 const StatisticsGrid = styled.View`
   flex-direction: row;
   flex-wrap: wrap;
@@ -358,6 +419,7 @@ const StatisticsGrid = styled.View`
   margin-bottom: 20px;
 `;
 
+// Lista “top especialidades” com card simples
 const SpecialtyContainer = styled.View`
   background-color: ${theme.colors.white};
   border-radius: 8px;
@@ -388,4 +450,4 @@ const SpecialtyCount = styled.Text`
   font-weight: 600;
 `;
 
-export default AdminDashboardScreen; 
+export default AdminDashboardScreen;

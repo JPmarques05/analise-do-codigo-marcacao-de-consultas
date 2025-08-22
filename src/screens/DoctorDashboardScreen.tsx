@@ -1,3 +1,19 @@
+// DoctorDashboardScreen.tsx
+// -----------------------------------------------------------------------------
+// Painel do Médico.
+// Responsabilidades:
+// 1) Carregar consultas do médico autenticado e estatísticas pessoais.
+// 2) Exibir métricas (StatisticsCard) e lista de consultas com status.
+// 3) Permitir confirmar/cancelar consultas via modal (AppointmentActionModal).
+// 4) Notificar o paciente quando a consulta for confirmada/cancelada.
+//
+// Observações de fluxo:
+// - Consultas são lidas/escritas no AsyncStorage (persistência local simulada).
+// - Estatísticas são fornecidas por statisticsService (agregações simuladas).
+// - useFocusEffect recarrega dados sempre que a tela volta ao foco.
+// - A ação de confirmar/cancelar dispara o modal para coletar motivo (no cancelamento).
+// -----------------------------------------------------------------------------
+
 import React, { useState } from 'react';
 import styled from 'styled-components/native';
 import { ScrollView, ViewStyle, TextStyle } from 'react-native';
@@ -15,10 +31,14 @@ import { statisticsService, Statistics } from '../services/statistics';
 import { notificationService } from '../services/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Tipagem de navegação para esta tela (stack do app).
 type DoctorDashboardScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'DoctorDashboard'>;
 };
 
+// Modelo local de consulta (mantido simples para esta tela).
+// NOTE: se o cancelamento guarda um "reason", considere adicionar `cancelReason?: string` aqui
+// para alinhar com o que é salvo no armazenamento (ver handleConfirmAction).
 interface Appointment {
   id: string;
   patientId: string;
@@ -31,10 +51,14 @@ interface Appointment {
   status: 'pending' | 'confirmed' | 'cancelled';
 }
 
+// Props de estilo (status usado para colorir badge/texto)
 interface StyledProps {
-  status: string;
+  status: string; // Sugestão: restringir para 'pending' | 'confirmed' | 'cancelled' por segurança.
 }
 
+// -----------------------------------------------------------------------------
+// Mapeamentos de status -> cor e texto (centralizam semântica).
+// -----------------------------------------------------------------------------
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed':
@@ -58,15 +82,28 @@ const getStatusText = (status: string) => {
 };
 
 const DoctorDashboardScreen: React.FC = () => {
+  // Auth: usado para recuperar ID do médico e para efetuar logout.
   const { user, signOut } = useAuth();
+
+  // Navegação tipada para abrir outras telas (Perfil/Configurações).
   const navigation = useNavigation<DoctorDashboardScreenProps['navigation']>();
+
+  // Estados de dados e UI.
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [statistics, setStatistics] = useState<Partial<Statistics> | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Estados do modal (ação sobre uma consulta).
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [actionType, setActionType] = useState<'confirm' | 'cancel'>('confirm');
 
+  // -----------------------------------------------------------------------------
+  // loadAppointments:
+  // - Busca todas as consultas do storage e filtra pelas do médico logado.
+  // - Carrega estatísticas do médico (se houver user.id).
+  // - Controla `loading` para feedback.
+  // -----------------------------------------------------------------------------
   const loadAppointments = async () => {
     try {
       const storedAppointments = await AsyncStorage.getItem('@MedicalApp:appointments');
@@ -78,7 +115,7 @@ const DoctorDashboardScreen: React.FC = () => {
         setAppointments(doctorAppointments);
       }
 
-      // Carrega estatísticas do médico
+      // Carrega estatísticas pessoais do médico
       if (user?.id) {
         const stats = await statisticsService.getDoctorStatistics(user.id);
         setStatistics(stats);
@@ -90,17 +127,32 @@ const DoctorDashboardScreen: React.FC = () => {
     }
   };
 
+  // -----------------------------------------------------------------------------
+  // handleOpenModal:
+  // - Define consulta selecionada e tipo de ação, e exibe o modal.
+  // -----------------------------------------------------------------------------
   const handleOpenModal = (appointment: Appointment, action: 'confirm' | 'cancel') => {
     setSelectedAppointment(appointment);
     setActionType(action);
     setModalVisible(true);
   };
 
+  // Fecha o modal e limpa a consulta selecionada
   const handleCloseModal = () => {
     setModalVisible(false);
     setSelectedAppointment(null);
   };
 
+  // -----------------------------------------------------------------------------
+  // handleConfirmAction:
+  // - Recebe (opcionalmente) um motivo (quando ação for cancelamento).
+  // - Atualiza status da consulta no AsyncStorage.
+  // - Notifica o paciente conforme a ação.
+  // - Recarrega a lista ao final.
+  //
+  // Observação: AppointmentActionModal já chama `onClose()` após `onConfirm()`,
+  // então o modal fecha automaticamente depois da confirmação/cancelamento.
+  // -----------------------------------------------------------------------------
   const handleConfirmAction = async (reason?: string) => {
     if (!selectedAppointment) return;
 
@@ -108,19 +160,22 @@ const DoctorDashboardScreen: React.FC = () => {
       const storedAppointments = await AsyncStorage.getItem('@MedicalApp:appointments');
       if (storedAppointments) {
         const allAppointments: Appointment[] = JSON.parse(storedAppointments);
+
         const updatedAppointments = allAppointments.map(appointment => {
           if (appointment.id === selectedAppointment.id) {
             return { 
               ...appointment, 
               status: actionType === 'confirm' ? 'confirmed' : 'cancelled',
+              // Armazena razão de cancelamento quando fornecida (não quebra se não existir no tipo)
               ...(reason && { cancelReason: reason })
             };
           }
           return appointment;
         });
+
         await AsyncStorage.setItem('@MedicalApp:appointments', JSON.stringify(updatedAppointments));
 
-        // Envia notificação para o paciente
+        // Envia notificação para o paciente (fluxo simulado)
         if (actionType === 'confirm') {
           await notificationService.notifyAppointmentConfirmed(
             selectedAppointment.patientId,
@@ -134,14 +189,16 @@ const DoctorDashboardScreen: React.FC = () => {
           );
         }
 
-        loadAppointments(); // Recarrega a lista
+        loadAppointments(); // Recarrega para refletir mudanças e métricas
       }
     } catch (error) {
       console.error('Erro ao atualizar status:', error);
     }
   };
 
-  // Carrega as consultas quando a tela estiver em foco
+  // -----------------------------------------------------------------------------
+  // Recarrega as consultas/estatísticas sempre que a tela volta ao foco.
+  // -----------------------------------------------------------------------------
   useFocusEffect(
     React.useCallback(() => {
       loadAppointments();
@@ -150,10 +207,13 @@ const DoctorDashboardScreen: React.FC = () => {
 
   return (
     <Container>
+      {/* Header com saudação e sino de notificações */}
       <Header />
+
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Title>Minhas Consultas</Title>
 
+        {/* Atalhos de navegação do médico */}
         <Button
           title="Meu Perfil"
           onPress={() => navigation.navigate('Profile')}
@@ -168,6 +228,7 @@ const DoctorDashboardScreen: React.FC = () => {
           buttonStyle={styles.settingsButton}
         />
 
+        {/* Métricas do médico (se disponíveis) */}
         <SectionTitle>Minhas Estatísticas</SectionTitle>
         {statistics && (
           <StatisticsGrid>
@@ -198,6 +259,7 @@ const DoctorDashboardScreen: React.FC = () => {
           </StatisticsGrid>
         )}
 
+        {/* Lista de consultas do médico */}
         <SectionTitle>Minhas Consultas</SectionTitle>
         {loading ? (
           <LoadingText>Carregando consultas...</LoadingText>
@@ -216,11 +278,15 @@ const DoctorDashboardScreen: React.FC = () => {
                 <Text style={styles.specialty as TextStyle}>
                   {appointment.specialty}
                 </Text>
+
+                {/* Badge de status (cor e texto conforme semântica) */}
                 <StatusBadge status={appointment.status}>
                   <StatusText status={appointment.status}>
                     {getStatusText(appointment.status)}
                   </StatusText>
                 </StatusBadge>
+
+                {/* Ações somente quando pendente: abre modal para confirmar/cancelar */}
                 {appointment.status === 'pending' && (
                   <ButtonContainer>
                     <Button
@@ -242,6 +308,7 @@ const DoctorDashboardScreen: React.FC = () => {
           ))
         )}
 
+        {/* Logout */}
         <Button
           title="Sair"
           onPress={signOut}
@@ -249,6 +316,7 @@ const DoctorDashboardScreen: React.FC = () => {
           buttonStyle={styles.logoutButton}
         />
 
+        {/* Modal de ação (confirmar/cancelar) — controlado pelo estado local */}
         {selectedAppointment && (
           <AppointmentActionModal
             visible={modalVisible}
@@ -269,6 +337,9 @@ const DoctorDashboardScreen: React.FC = () => {
   );
 };
 
+// -----------------------------------------------------------------------------
+// Estilos (objetos JS para RNE + styled-components para layout e tipografia)
+// -----------------------------------------------------------------------------
 const styles = {
   scrollContent: {
     padding: 20,
@@ -339,6 +410,7 @@ const SectionTitle = styled.Text`
   margin-top: 10px;
 `;
 
+// Card de consulta (usa ListItem para estrutura interna)
 const AppointmentCard = styled(ListItem)`
   background-color: ${theme.colors.background};
   border-radius: 8px;
@@ -362,6 +434,7 @@ const EmptyText = styled.Text`
   margin-top: 20px;
 `;
 
+// Badge com leve transparência no fundo
 const StatusBadge = styled.View<StyledProps>`
   background-color: ${(props: StyledProps) => getStatusColor(props.status) + '20'};
   padding: 4px 8px;
@@ -370,18 +443,21 @@ const StatusBadge = styled.View<StyledProps>`
   margin-top: 8px;
 `;
 
+// Texto colorido conforme status
 const StatusText = styled.Text<StyledProps>`
   color: ${(props: StyledProps) => getStatusColor(props.status)};
   font-size: 12px;
   font-weight: 500;
 `;
 
+// Ações lado a lado
 const ButtonContainer = styled.View`
   flex-direction: row;
   justify-content: space-between;
   margin-top: 8px;
 `;
 
+// Grid de cards de estatística
 const StatisticsGrid = styled.View`
   flex-direction: row;
   flex-wrap: wrap;
@@ -389,4 +465,4 @@ const StatisticsGrid = styled.View`
   margin-bottom: 20px;
 `;
 
-export default DoctorDashboardScreen; 
+export default DoctorDashboardScreen;

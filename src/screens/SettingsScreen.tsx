@@ -1,3 +1,22 @@
+// SettingsScreen.tsx
+// -----------------------------------------------------------------------------
+// Tela de Configurações do aplicativo.
+// Responsabilidades:
+// 1) Carregar/persistir preferências do app (notificações, backup automático,
+//    tema e idioma) via storageService.
+// 2) Exibir informações de armazenamento (tamanho do cache, total de chaves).
+// 3) Ações utilitárias: criar backup (compartilhar), limpar cache e apagar
+//    todos os dados (com confirmação em dois passos).
+// 4) Recarregar configurações sempre que a tela ganha foco.
+//
+// Observações de implementação:
+// - O estado `settings` é mantido localmente e sincronizado com storageService.
+// - As mudanças de toggle são "optimistic updates": atualizam a UI e só então
+//   persistem; em erro, mostram Alert (sem revert — ver notas).
+// - `Share.share` envia o backup como texto (message). Em apps reais, costuma-se
+//   gerar um arquivo e compartilhar a URL/arquivo (ver notas).
+// -----------------------------------------------------------------------------
+
 import React, { useState } from 'react';
 import styled from 'styled-components/native';
 import { ScrollView, ViewStyle, Alert, Share } from 'react-native';
@@ -11,10 +30,12 @@ import theme from '../styles/theme';
 import Header from '../components/Header';
 import { storageService } from '../services/storage';
 
+// Tipagem de navegação desta tela.
 type SettingsScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Settings'>;
 };
 
+// Modelo das preferências da aplicação (mantido simples/local).
 interface AppSettings {
   notifications: boolean;
   autoBackup: boolean;
@@ -23,8 +44,17 @@ interface AppSettings {
 }
 
 const SettingsScreen: React.FC = () => {
+  // Estado global (auth) para eventual logout após "apagar tudo".
   const { user, signOut } = useAuth();
+
+  // Navegação tipada para voltar a telas anteriores.
   const navigation = useNavigation<SettingsScreenProps['navigation']>();
+
+  // ---------------------------------------------------------------------------
+  // Estado local de preferências: inicia com valores padrão até carregar do storage.
+  // `loading` bloqueia a tela com "Carregando" até que settings e storageInfo venham.
+  // `storageInfo` guarda dados agregados (ex.: tamanho de cache, total de chaves).
+  // ---------------------------------------------------------------------------
   const [settings, setSettings] = useState<AppSettings>({
     notifications: true,
     autoBackup: true,
@@ -32,8 +62,14 @@ const SettingsScreen: React.FC = () => {
     language: 'pt-BR',
   });
   const [loading, setLoading] = useState(true);
-  const [storageInfo, setStorageInfo] = useState<any>(null);
+  const [storageInfo, setStorageInfo] = useState<any>(null); // ver notas sobre tipagem
 
+  // ---------------------------------------------------------------------------
+  // loadSettings:
+  // - Busca as preferências atuais e infos de armazenamento via storageService.
+  // - Atualiza estados e encerra loading.
+  // - Executada sempre que a tela volta ao foco (useFocusEffect).
+  // ---------------------------------------------------------------------------
   const loadSettings = async () => {
     try {
       const appSettings = await storageService.getAppSettings();
@@ -48,33 +84,49 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  // Recarrega configurações sempre que a tela estiver em foco.
   useFocusEffect(
     React.useCallback(() => {
       loadSettings();
     }, [])
   );
 
+  // ---------------------------------------------------------------------------
+  // updateSetting:
+  // - Aplica alteração local imediatamente (optimistic update) para resposta rápida.
+  // - Persiste alteração no storage. Em erro, exibe alerta (não faz rollback).
+  // - `keyof AppSettings` garante chave válida; `value` pode variar por chave.
+  // ---------------------------------------------------------------------------
   const updateSetting = async (key: keyof AppSettings, value: any) => {
     try {
       const updatedSettings = { ...settings, [key]: value };
-      setSettings(updatedSettings);
-      await storageService.updateAppSettings({ [key]: value });
+      setSettings(updatedSettings); // Atualiza UI imediatamente
+      await storageService.updateAppSettings({ [key]: value }); // Persiste alteração
     } catch (error) {
       console.error('Erro ao atualizar configuração:', error);
       Alert.alert('Erro', 'Não foi possível salvar a configuração');
+      // Opcional (ver notas): reverter `setSettings` ao estado anterior.
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // handleCreateBackup:
+  // - Solicita ao storageService a criação de um "backup" (string JSON).
+  // - Compartilha via Share API do RN (como texto).
+  // - Exibe feedback visual com `loading` no botão.
+  // ---------------------------------------------------------------------------
   const handleCreateBackup = async () => {
     try {
       setLoading(true);
       const backup = await storageService.createBackup();
       
+      // Nome do "arquivo" para título de compartilhamento (não cria arquivo físico aqui).
       const fileName = `backup_${new Date().toISOString().split('T')[0]}.json`;
       
       await Share.share({
-        message: backup,
-        title: `Backup do App - ${fileName}`,
+        message: backup,                      // Conteúdo textual do backup
+        title: `Backup do App - ${fileName}`, // Título exibido no share sheet
+        // Nota: Para iOS, também existe o campo `url`. Ver notas.
       });
       
       Alert.alert('Sucesso', 'Backup criado e compartilhado com sucesso!');
@@ -86,6 +138,11 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // handleClearCache:
+  // - Confirmação simples antes de limpar o cache via storageService.
+  // - Após limpar, recarrega informações e dá feedback ao usuário.
+  // ---------------------------------------------------------------------------
   const handleClearCache = async () => {
     Alert.alert(
       'Limpar Cache',
@@ -97,6 +154,7 @@ const SettingsScreen: React.FC = () => {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Nota: storageService.clearCache() pode ser assíncrono; se for, prefira await.
               storageService.clearCache();
               await loadSettings();
               Alert.alert('Sucesso', 'Cache limpo com sucesso!');
@@ -109,6 +167,11 @@ const SettingsScreen: React.FC = () => {
     );
   };
 
+  // ---------------------------------------------------------------------------
+  // handleClearAllData:
+  // - "Zona de perigo": confirmação dupla antes de apagar **todos** os dados.
+  // - Após concluir, força signOut, o que deve levar o app a um estado limpo.
+  // ---------------------------------------------------------------------------
   const handleClearAllData = async () => {
     Alert.alert(
       'Apagar Todos os Dados',
@@ -130,9 +193,14 @@ const SettingsScreen: React.FC = () => {
                   onPress: async () => {
                     try {
                       await storageService.clearAll();
-                      Alert.alert('Concluído', 'Todos os dados foram apagados. O app será reiniciado.', [
-                        { text: 'OK', onPress: () => signOut() }
-                      ]);
+                      Alert.alert(
+                        'Concluído',
+                        'Todos os dados foram apagados. O app será reiniciado.',
+                        [
+                          // Ao sair, AuthContext limpa user/AsyncStorage e o AppNavigator muda para stack público.
+                          { text: 'OK', onPress: () => signOut() }
+                        ]
+                      );
                     } catch (error) {
                       Alert.alert('Erro', 'Não foi possível apagar os dados');
                     }
@@ -146,6 +214,7 @@ const SettingsScreen: React.FC = () => {
     );
   };
 
+  // Enquanto carrega, retorna uma tela simples com o Header + spinner/texto
   if (loading) {
     return (
       <Container>
@@ -159,12 +228,17 @@ const SettingsScreen: React.FC = () => {
 
   return (
     <Container>
+      {/* Header (saudação + sino) */}
       <Header />
+
+      {/* Conteúdo rolável */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Title>Configurações</Title>
 
+        {/* Seção de preferências (toggles) */}
         <SectionTitle>Preferências</SectionTitle>
         <SettingsCard>
+          {/* Notificações push (simulado) */}
           <ListItem>
             <ListItem.Content>
               <ListItem.Title>Notificações</ListItem.Title>
@@ -177,6 +251,7 @@ const SettingsScreen: React.FC = () => {
             />
           </ListItem>
 
+          {/* Backup automático (simulado) */}
           <ListItem>
             <ListItem.Content>
               <ListItem.Title>Backup Automático</ListItem.Title>
@@ -190,6 +265,7 @@ const SettingsScreen: React.FC = () => {
           </ListItem>
         </SettingsCard>
 
+        {/* Seção de dados/armazenamento: infos agregadas do storageService */}
         <SectionTitle>Dados e Armazenamento</SectionTitle>
         <SettingsCard>
           {storageInfo && (
@@ -206,12 +282,13 @@ const SettingsScreen: React.FC = () => {
           )}
         </SettingsCard>
 
+        {/* Utilidades: criar backup, limpar cache */}
         <Button
           title="Criar Backup"
           onPress={handleCreateBackup}
           containerStyle={styles.button as ViewStyle}
           buttonStyle={styles.backupButton}
-          loading={loading}
+          loading={loading} // desabilita/indica processamento do backup
         />
 
         <Button
@@ -221,6 +298,7 @@ const SettingsScreen: React.FC = () => {
           buttonStyle={styles.cacheButton}
         />
 
+        {/* Zona de perigo: apagar tudo (dupla confirmação) */}
         <SectionTitle>Ações Perigosas</SectionTitle>
         <Button
           title="Apagar Todos os Dados"
@@ -229,6 +307,7 @@ const SettingsScreen: React.FC = () => {
           buttonStyle={styles.dangerButton}
         />
 
+        {/* Voltar para a tela anterior */}
         <Button
           title="Voltar"
           onPress={() => navigation.goBack()}
@@ -240,6 +319,9 @@ const SettingsScreen: React.FC = () => {
   );
 };
 
+// -----------------------------------------------------------------------------
+// Estilos (objetos JS usados em componentes de terceiros)
+// -----------------------------------------------------------------------------
 const styles = {
   scrollContent: {
     padding: 20,
@@ -266,6 +348,9 @@ const styles = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Estilos (styled-components) — layout e tipografia da tela
+// -----------------------------------------------------------------------------
 const Container = styled.View`
   flex: 1;
   background-color: ${theme.colors.background};

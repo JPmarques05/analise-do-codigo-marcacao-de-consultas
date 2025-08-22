@@ -1,3 +1,19 @@
+// PatientDashboardScreen.tsx
+// -----------------------------------------------------------------------------
+// Painel do Paciente.
+// Responsabilidades:
+// 1) Carregar e exibir apenas as consultas do paciente autenticado.
+// 2) Mostrar dados relevantes (médico, especialidade, data/hora, status).
+// 3) Oferecer atalhos de navegação (Agendar, Perfil, Configurações) e Logout.
+// 4) Atualizar a lista sempre que a tela voltar ao foco.
+//
+// Decisões/observações:
+// - Persistência local via AsyncStorage na chave '@MedicalApp:appointments'.
+// - Filtro por `appointment.patientId === user?.id` garante isolamento dos dados.
+// - `useFocusEffect` recarrega a lista ao focar (útil após criar/editar).
+// - Cores/textos de status centralizados em helpers (getStatusColor/getStatusText).
+// -----------------------------------------------------------------------------
+
 import React, { useState } from 'react';
 import styled from 'styled-components/native';
 import { ScrollView, ViewStyle, TextStyle } from 'react-native';
@@ -11,26 +27,34 @@ import theme from '../styles/theme';
 import Header from '../components/Header';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Tipagem de navegação para esta tela (rota 'PatientDashboard')
 type PatientDashboardScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'PatientDashboard'>;
 };
 
+// Modelo local simplificado de consulta.
+// (Se existir um tipo global para Appointment, prefira importá-lo)
 interface Appointment {
   id: string;
   patientId: string;
   patientName: string;
   doctorId: string;
   doctorName: string;
-  date: string;
-  time: string;
+  date: string;    // formato salvo em outras telas: 'DD/MM/AAAA'
+  time: string;    // 'HH:MM'
   specialty: string;
   status: 'pending' | 'confirmed' | 'cancelled';
 }
 
+// Props de estilo usadas para colorir badge/texto conforme o status.
 interface StyledProps {
-  status: string;
+  status: string; // SUGESTÃO: restringir para 'pending' | 'confirmed' | 'cancelled'
 }
 
+// -----------------------------------------------------------------------------
+// Helpers semânticos de status → cor/texto.
+// Centralizam a lógica para manter consistência visual.
+// -----------------------------------------------------------------------------
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed':
@@ -54,11 +78,22 @@ const getStatusText = (status: string) => {
 };
 
 const PatientDashboardScreen: React.FC = () => {
+  // Auth: dados do usuário (paciente) e ação de sair.
   const { user, signOut } = useAuth();
+
+  // Navegação tipada para chamar rotas do stack.
   const navigation = useNavigation<PatientDashboardScreenProps['navigation']>();
+
+  // Estado local da tela: lista de consultas do paciente e indicador de loading.
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // ---------------------------------------------------------------------------
+  // loadAppointments:
+  // - Lê todas as consultas do AsyncStorage.
+  // - Filtra apenas as do paciente autenticado (patientId === user?.id).
+  // - Atualiza estados e encerra `loading` no finally.
+  // ---------------------------------------------------------------------------
   const loadAppointments = async () => {
     try {
       const storedAppointments = await AsyncStorage.getItem('@MedicalApp:appointments');
@@ -76,7 +111,10 @@ const PatientDashboardScreen: React.FC = () => {
     }
   };
 
-  // Carrega as consultas quando a tela estiver em foco
+  // ---------------------------------------------------------------------------
+  // Recarrega ao focar a tela (ex.: ao voltar de "Agendar Consulta").
+  // Sem dependências para garantir recarga em todo foco.
+  // ---------------------------------------------------------------------------
   useFocusEffect(
     React.useCallback(() => {
       loadAppointments();
@@ -85,10 +123,14 @@ const PatientDashboardScreen: React.FC = () => {
 
   return (
     <Container>
+      {/* Header com saudação e sino de notificações */}
       <Header />
+
+      {/* Conteúdo rolável (permite caber em telas pequenas) */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Title>Minhas Consultas</Title>
 
+        {/* Ações principais: agendar, perfil e configurações */}
         <Button
           title="Agendar Nova Consulta"
           onPress={() => navigation.navigate('CreateAppointment')}
@@ -110,6 +152,7 @@ const PatientDashboardScreen: React.FC = () => {
           buttonStyle={styles.settingsButton}
         />
 
+        {/* Lista/bodies: loading → vazio → mapeamento de consultas */}
         {loading ? (
           <LoadingText>Carregando consultas...</LoadingText>
         ) : appointments.length === 0 ? (
@@ -118,18 +161,25 @@ const PatientDashboardScreen: React.FC = () => {
           appointments.map((appointment) => (
             <AppointmentCard key={appointment.id}>
               <ListItem.Content>
+                {/* Identificação (opcional mostrar paciente; aqui mantém o padrão das outras telas) */}
                 <ListItem.Title style={styles.patientName as TextStyle}>
                   Paciente: {appointment.patientName}
                 </ListItem.Title>
+
+                {/* Data/hora no formato salvo (evita parse de Date) */}
                 <ListItem.Subtitle style={styles.dateTime as TextStyle}>
                   {appointment.date} às {appointment.time}
                 </ListItem.Subtitle>
+
+                {/* Médico + especialidade */}
                 <Text style={styles.doctorName as TextStyle}>
                   {appointment.doctorName}
                 </Text>
                 <Text style={styles.specialty as TextStyle}>
                   {appointment.specialty}
                 </Text>
+
+                {/* Badge de status com cor e label amigável */}
                 <StatusBadge status={appointment.status}>
                   <StatusText status={appointment.status}>
                     {getStatusText(appointment.status)}
@@ -140,6 +190,7 @@ const PatientDashboardScreen: React.FC = () => {
           ))
         )}
 
+        {/* Logout */}
         <Button
           title="Sair"
           onPress={signOut}
@@ -151,6 +202,9 @@ const PatientDashboardScreen: React.FC = () => {
   );
 };
 
+// -----------------------------------------------------------------------------
+// Estilos (objetos JS para props de terceiros + styled-components para layout)
+// -----------------------------------------------------------------------------
 const styles = {
   scrollContent: {
     padding: 20,
@@ -206,6 +260,7 @@ const Title = styled.Text`
   text-align: center;
 `;
 
+// Cartão (usa ListItem para uniformizar o layout interno)
 const AppointmentCard = styled(ListItem)`
   background-color: ${theme.colors.background};
   border-radius: 8px;
@@ -229,6 +284,7 @@ const EmptyText = styled.Text`
   margin-top: 20px;
 `;
 
+// Badge de status com fundo translúcido e texto colorido
 const StatusBadge = styled.View<StyledProps>`
   background-color: ${(props: StyledProps) => getStatusColor(props.status) + '20'};
   padding: 4px 8px;
@@ -243,4 +299,4 @@ const StatusText = styled.Text<StyledProps>`
   font-weight: 500;
 `;
 
-export default PatientDashboardScreen; 
+export default PatientDashboardScreen;
