@@ -1,14 +1,41 @@
+// services/auth.ts
+// -----------------------------------------------------------------------------
+// Serviço de autenticação e gerenciamento básico de usuários (mock).
+// Responsabilidades:
+// 1) Autenticar usuários (admin, médicos mockados e pacientes registrados).
+// 2) Registrar novos pacientes e persistir em AsyncStorage.
+// 3) Expor utilitários para listar usuários e carregar pacientes registrados
+//    na inicialização do app.
+//
+// Observações de arquitetura:
+// - Este serviço é "stateless" quanto ao usuário logado (quem persiste USER/TOKEN
+//   é o AuthContext). Aqui apenas retornamos o user/token.
+// - Pacientes registrados são mantidos em um array in-memory (`registeredUsers`)
+//   e reidratados a partir do AsyncStorage via `loadRegisteredUsers()`.
+// - Há duas chaves distintas para usuários no projeto: `@MedicalApp:registeredUsers`
+//   (usada aqui) e `@MedicalApp:users` (usada em algumas telas de admin).
+//   Veja notas ao final sobre alinhar essas fontes de verdade.
+// - Segurança: senhas de pacientes são salvas em plaintext (apenas para fins
+//   didáticos). Em produção, NUNCA fazer isso. Ver recomendações ao final.
+// -----------------------------------------------------------------------------
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User, LoginCredentials, RegisterData, AuthResponse } from '../types/auth';
 
-// Chaves de armazenamento
+// -----------------------------------------------------------------------------
+// Chaves centralizadas de armazenamento neste serviço.
+// USER/TOKEN são usadas pelo AuthContext; REGISTERED_USERS é própria deste serviço.
+// -----------------------------------------------------------------------------
 const STORAGE_KEYS = {
   USER: '@MedicalApp:user',
   TOKEN: '@MedicalApp:token',
   REGISTERED_USERS: '@MedicalApp:registeredUsers',
 };
 
-// Médicos mockados que podem fazer login
+// -----------------------------------------------------------------------------
+// Base mock de médicos: permitem login com senha fixa "123456".
+// Cada item inclui specialty e image para enriquecer UI.
+// -----------------------------------------------------------------------------
 const mockDoctors = [
   {
     id: '1',
@@ -36,7 +63,9 @@ const mockDoctors = [
   },
 ];
 
-// Admin mockado
+// -----------------------------------------------------------------------------
+// Admin mockado: também autentica com senha fixa "123456".
+// -----------------------------------------------------------------------------
 const mockAdmin = {
   id: 'admin',
   name: 'Administrador',
@@ -45,12 +74,24 @@ const mockAdmin = {
   image: 'https://randomuser.me/api/portraits/men/3.jpg',
 };
 
-// Lista de usuários cadastrados (pacientes)
+// -----------------------------------------------------------------------------
+// Fonte de verdade in-memory de pacientes registrados. É reidratada na inicialização
+// pelo método `loadRegisteredUsers()` e persistida em REGISTERED_USERS.
+// OBS: mantém `password` para fins didáticos (ver notas de segurança).
+// -----------------------------------------------------------------------------
 let registeredUsers: (User & { password: string })[] = [];
 
+// -----------------------------------------------------------------------------
+// authService: operações de autenticação/registro e utilitários de listagem.
+// -----------------------------------------------------------------------------
 export const authService = {
+  // Autentica admin, médico mockado ou paciente registrado.
+  // - Admin: email fixo + senha "123456" → retorna user/token.
+  // - Doctor: email presente em mockDoctors + senha "123456" → retorna user/token.
+  // - Patient: busca em `registeredUsers`; compara senha salva; retorna user/token.
+  // - Em qualquer falha: lança erro "Email ou senha inválidos".
   async signIn(credentials: LoginCredentials): Promise<AuthResponse> {
-    // Verifica se é o admin
+    // 1) Verifica admin (credenciais fixas)
     if (credentials.email === mockAdmin.email && credentials.password === '123456') {
       return {
         user: mockAdmin,
@@ -58,7 +99,7 @@ export const authService = {
       };
     }
 
-    // Verifica se é um médico
+    // 2) Verifica médicos mockados (senha fixa)
     const doctor = mockDoctors.find(
       (d) => d.email === credentials.email && credentials.password === '123456'
     );
@@ -69,14 +110,14 @@ export const authService = {
       };
     }
 
-    // Verifica se é um paciente registrado
+    // 3) Verifica paciente registrado (senha específica do paciente)
     const patient = registeredUsers.find(
       (p) => p.email === credentials.email
     );
     if (patient) {
-      // Verifica a senha do paciente
+      // Compara senha informada com a persistida (plaintext neste mock)
       if (credentials.password === patient.password) {
-        // Remove a senha do objeto antes de retornar
+        // Remove a senha do objeto antes de devolver
         const { password, ...patientWithoutPassword } = patient;
         return {
           user: patientWithoutPassword,
@@ -85,11 +126,16 @@ export const authService = {
       }
     }
 
+    // 4) Se nenhuma das opções acima autenticou, dispara erro
     throw new Error('Email ou senha inválidos');
   },
 
+  // Registra um novo paciente (não permite colidir com admin/médicos/pacientes existentes).
+  // - Gera id simples "patient-N".
+  // - Define avatar com base no índice (alternando men/women).
+  // - Persiste em REGISTERED_USERS e retorna user/token sem a senha.
   async register(data: RegisterData): Promise<AuthResponse> {
-    // Verifica se o email já está em uso
+    // 1) Evita e-mails duplicados entre admin, médicos e pacientes já registrados
     if (
       mockDoctors.some((d) => d.email === data.email) ||
       mockAdmin.email === data.email ||
@@ -98,7 +144,7 @@ export const authService = {
       throw new Error('Email já está em uso');
     }
 
-    // Cria um novo paciente
+    // 2) Cria o paciente (mantém `password` somente neste exemplo didático)
     const newPatient: User & { password: string } = {
       id: `patient-${registeredUsers.length + 1}`,
       name: data.name,
@@ -110,12 +156,11 @@ export const authService = {
       password: data.password,
     };
 
+    // 3) Atualiza fonte in-memory e persiste no AsyncStorage
     registeredUsers.push(newPatient);
-
-    // Salva a lista atualizada de usuários
     await AsyncStorage.setItem(STORAGE_KEYS.REGISTERED_USERS, JSON.stringify(registeredUsers));
 
-    // Remove a senha do objeto antes de retornar
+    // 4) Retorna user/token (sem a senha)
     const { password, ...patientWithoutPassword } = newPatient;
     return {
       user: patientWithoutPassword,
@@ -123,12 +168,15 @@ export const authService = {
     };
   },
 
+  // "Logout" no escopo do serviço: remove USER e TOKEN do storage.
+  // Observação: o AuthContext também executa essa limpeza; aqui é redundante,
+  // mas útil se este serviço for usado isoladamente.
   async signOut(): Promise<void> {
-    // Limpa os dados do usuário do AsyncStorage
     await AsyncStorage.removeItem(STORAGE_KEYS.USER);
     await AsyncStorage.removeItem(STORAGE_KEYS.TOKEN);
   },
 
+  // Recupera o usuário armazenado pelo AuthContext (ou null se não houver).
   async getStoredUser(): Promise<User | null> {
     try {
       const userJson = await AsyncStorage.getItem(STORAGE_KEYS.USER);
@@ -142,20 +190,27 @@ export const authService = {
     }
   },
 
-  // Funções para o admin
+  // ------------------------- Utilitários (admin) -----------------------------
+
+  // Retorna médicos mockados + pacientes registrados ( fonte agregada ).
+  // Importante: depende de `registeredUsers` já ter sido reidratado.
   async getAllUsers(): Promise<User[]> {
     return [...mockDoctors, ...registeredUsers];
   },
 
+  // Apenas médicos mockados
   async getAllDoctors(): Promise<User[]> {
     return mockDoctors;
   },
 
+  // Apenas pacientes registrados
   async getPatients(): Promise<User[]> {
     return registeredUsers;
   },
 
-  // Função para carregar usuários registrados ao iniciar o app
+  // Carrega pacientes registrados persistidos no AsyncStorage
+  // para a fonte in-memory (`registeredUsers`). Deve ser chamado
+  // na inicialização do app (o AuthProvider já faz isso).
   async loadRegisteredUsers(): Promise<void> {
     try {
       const usersJson = await AsyncStorage.getItem(STORAGE_KEYS.REGISTERED_USERS);
@@ -166,4 +221,4 @@ export const authService = {
       console.error('Erro ao carregar usuários registrados:', error);
     }
   },
-}; 
+};
